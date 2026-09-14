@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+
+# Large raw dataset
+data/raw/
+
+# Trained model binaries
+models/*.joblib
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
