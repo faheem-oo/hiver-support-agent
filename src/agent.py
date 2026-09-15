@@ -161,6 +161,9 @@ def retrieve_responses(message, predicted_intent, top_k=3):
     """
     Retrieve historical examples while preferring examples
     from the same predicted intent.
+
+    Useful historical responses are ranked above generic
+    DM-only responses.
     """
 
     query_vector = retrieval_vectorizer.transform([message])
@@ -187,6 +190,7 @@ def retrieve_responses(message, predicted_intent, top_k=3):
     candidates = []
 
     for idx in candidate_indices:
+
         similarity = float(similarities[idx])
 
         if similarity <= 0:
@@ -196,10 +200,86 @@ def retrieve_responses(message, predicted_intent, top_k=3):
 
         quality = response_quality(response)
 
-        # Combined score:
-        # semantic similarity is primary,
-        # response quality provides a small reranking signal.
-        combined_score = similarity + 0.015 * quality
+                # -------------------------------------------------
+        # Topic keyword overlap
+        # -------------------------------------------------
+
+        customer_text = str(
+            retrieval_df.iloc[idx]["customer_text"]
+        ).lower()
+
+        query_text = str(message).lower()
+
+        topic_terms = [
+            "wifi",
+            "wi-fi",
+            "bluetooth",
+            "battery",
+            "charging",
+            "screen",
+            "display",
+            "touch",
+            "ios",
+            "update",
+            "apple id",
+            "icloud",
+            "music",
+            "itunes",
+            "app store",
+            "purchase",
+            "refund",
+            "password",
+            "login",
+            "iphone",
+            "ipad",
+            "mac",
+            "apple watch",
+        ]
+
+        overlapping_terms = [
+            term
+            for term in topic_terms
+            if term in query_text
+            and term in customer_text
+        ]
+
+        topic_overlap = len(overlapping_terms)
+
+        # -------------------------------------------------
+        # Detect generic DM-only responses
+        # -------------------------------------------------
+
+        response_lower = str(response).lower()
+
+        generic_response = any(
+            pattern in response_lower
+            for pattern in [
+                "continue working with you via dm",
+                "reach out using the link",
+                "let's meet in dm",
+                "please answer in dm",
+                "let us know in a dm",
+                "contact us in dm",
+                "send us a dm",
+                "message us in dm",
+            ]
+        )
+
+        if generic_response:
+            generic_penalty = 0.10
+        else:
+            generic_penalty = 0.0
+
+        # -------------------------------------------------
+        # Combined retrieval score
+        # -------------------------------------------------
+
+        combined_score = (
+            similarity
+            + 0.04 * quality
+            + 0.08 * topic_overlap
+            - generic_penalty
+        )
 
         candidates.append(
             {
@@ -210,10 +290,18 @@ def retrieve_responses(message, predicted_intent, top_k=3):
             }
         )
 
+    # -----------------------------------------------------
+    # Rank candidates
+    # -----------------------------------------------------
+
     candidates.sort(
         key=lambda x: x["combined_score"],
         reverse=True
     )
+
+    # -----------------------------------------------------
+    # Build final results
+    # -----------------------------------------------------
 
     results = []
 
@@ -232,7 +320,6 @@ def retrieve_responses(message, predicted_intent, top_k=3):
         )
 
     return results
-
 
 # ---------------------------------------------------------
 # Escalation detection
@@ -569,191 +656,210 @@ def clean_historical_response(response):
 def draft_reply(
     message,
     intent,
-    should_escalate,
+    escalated,
     escalation_reason,
-    evidence
+    evidence,
+    retrieval_score=0.0
 ):
     """
-    Generate a grounded support reply.
+    Generate a support reply using the predicted intent and
+    the strongest historical evidence.
 
-    Escalated issues receive a safe handoff.
-    Non-escalated issues use intent-specific guidance
-    grounded in retrieved historical evidence.
+    The reply deliberately avoids inventing fixes that are not
+    supported by the historical evidence.
     """
 
-    # -----------------------------------------------------
-    # Escalation response
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
+    # Escalated cases
+    # ---------------------------------------------------------
 
-    if should_escalate:
-
-        reason_text = {
+    if escalated:
+        reason_messages = {
             "security_or_account_issue":
-                "because this involves account security",
+                "Because this may involve account security, we recommend contacting Apple Support directly so they can verify the account safely.",
+
             "data_loss_or_icloud_issue":
-                "because this may involve data loss",
+                "Because this may involve lost data or iCloud information, Apple Support should review the case directly before further troubleshooting.",
+
             "hardware_or_repair_issue":
-                "because this may require hardware service",
-            "repeated_troubleshooting_failed":
-                "because the issue has persisted after troubleshooting",
+                "Because this may involve hardware damage or a repair issue, Apple Support can assess the device and advise on the appropriate service.",
+
             "severe_device_failure":
-                "because the device appears to have a severe failure",
-            "insufficient_historical_evidence":
-                "because we don't have enough reliable historical evidence",
-        }.get(
+                "Because the device appears to have a severe failure, Apple Support should assess it directly.",
+
+            "repeated_device_failure":
+                "Because the problem is recurring despite previous attempts, Apple Support should review the case directly.",
+
+            "repeated_update_related_failure":
+                "Because the problem appears to be recurring after an update, Apple Support should review the device and update history directly.",
+
+            "repeated_troubleshooting_failed":
+                "Because you've already tried several troubleshooting steps without resolving the problem, Apple Support should review the case directly.",
+
+            "account_recovery_issue":
+                "Because this involves account recovery, Apple Support can help verify the account and provide the appropriate recovery steps.",
+
+            "purchase_or_compensation_issue":
+                "Because this involves a purchase, payment, refund, or compensation concern, Apple Support should review the transaction directly.",
+
+            "multiple_critical_issues":
+                "Because there are multiple significant issues involved, Apple Support should review the case directly."
+        }
+
+        return reason_messages.get(
             escalation_reason,
-            "because the issue may require additional support"
+            "This issue needs additional support review, so we recommend contacting Apple Support directly."
         )
 
-        return (
-            f"Thanks for reaching out. We recommend contacting "
-            f"Apple Support directly {reason_text}. "
-            f"They can take a closer look and provide the appropriate "
-            f"next steps."
-        )
 
-    # -----------------------------------------------------
-    # No historical evidence
-    # -----------------------------------------------------
-
-    if not evidence:
-
-        return (
-            "Thanks for reaching out. Could you provide a little "
-            "more detail about what happens when you try this?"
-        )
-
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
     # Extract useful historical responses
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
 
     historical_responses = []
 
     for item in evidence:
-
-        response = clean_historical_response(
-            item["response"]
-        )
+        response = item.get("response", "").strip()
 
         if not response:
             continue
 
-        quality = item["quality"]
+        response_lower = response.lower()
 
-        # Ignore responses that are purely DM redirects
-        # or otherwise scored as poor evidence.
-        if quality <= 0:
+        # Ignore responses that only redirect to DM
+        generic_patterns = [
+            "continue working with you via dm",
+            "reach out using the link",
+            "let's meet in dm",
+            "please answer in dm",
+            "let us know in a dm",
+            "contact us in dm"
+        ]
+
+        if any(pattern in response_lower for pattern in generic_patterns):
             continue
 
         historical_responses.append(response)
 
-    # -----------------------------------------------------
-    # Intent-specific response generation
-    # -----------------------------------------------------
+
+    # ---------------------------------------------------------
+    # If retrieval evidence is weak
+    # ---------------------------------------------------------
+
+    if retrieval_score < 0.15 or not historical_responses:
+        return (
+            "Thanks for reaching out. Could you share a little more "
+            "about what is happening, including any error message and "
+            "your device model or software version? That will help us "
+            "identify the appropriate next step."
+        )
+
+
+    # ---------------------------------------------------------
+    # Intent-specific replies
+    # ---------------------------------------------------------
 
     if intent == "connectivity":
-
         return (
-            "Thanks for reaching out. Let's troubleshoot the "
-            "Wi-Fi connection. What happens when you try to connect "
-            "to the network, and do you see any error message? "
-            "If possible, also let us know whether the iPhone can "
-            "connect to other Wi-Fi networks."
+            "Thanks for reaching out. Let's troubleshoot the connection. "
+            "Is the problem happening on all networks or only a specific "
+            "Wi-Fi/Bluetooth connection? If possible, let us know what "
+            "happens when you try to connect and whether you see an error."
         )
+
 
     if intent == "battery_charging":
+      return (
+        "Thanks for reaching out. Let's narrow down the battery or "
+        "charging issue. Is the battery draining quickly, charging "
+        "slowly, or failing to charge? Please share your iPhone model "
+        "and iOS version, and let us know when you first noticed the "
+        "problem."
+    )
 
-        return (
-            "Thanks for reaching out. Since the battery drain "
-            "started after the iOS update, please check your "
-            "Battery settings to see which apps or activity are "
-            "using the most power. If the issue continues, let us "
-            "know your iPhone model and iOS version so we can "
-            "narrow down the issue."
-        )
 
     if intent == "ios_update":
-
         return (
-            "Thanks for reaching out. Please let us know what "
-            "happens when you try to install or use the iOS update, "
-            "including any error message you see and your iPhone "
-            "model. That will help us determine the appropriate "
-            "next troubleshooting step."
+            "Thanks for reaching out. What happens when you try to install "
+            "or use the iOS update? If there is an error message, please "
+            "share it along with your iPhone model and current iOS version. "
+            "If the problem started after updating, please mention that too."
         )
+
 
     if intent == "device_performance":
-
         return (
-            "Thanks for reaching out. Could you tell us whether "
-            "the iPhone is slow, freezing, crashing, or becoming "
-            "unresponsive? Please also share your iPhone model and "
-            "iOS version so we can narrow down the issue."
+            "Thanks for reaching out. Let's narrow down the device issue. "
+            "Is the iPhone slow, freezing, restarting, crashing, or becoming "
+            "unresponsive? Please share the iPhone model, iOS version, and "
+            "whether the problem happens repeatedly."
         )
+
 
     if intent == "screen_display":
-
         return (
-            "Thanks for reaching out. Could you describe what is "
-            "happening with the screen or touch response? Please "
-            "also let us know your iPhone model and iOS version, "
-            "and whether the issue happens consistently."
+            "Thanks for reaching out. Could you describe what is happening "
+            "with the display or touch screen? Please let us know whether "
+            "the issue is constant or intermittent, and share your device "
+            "model and iOS version."
         )
+
 
     if intent == "apple_id_icloud":
-
         return (
-            "Thanks for reaching out. Please tell us what happens "
-            "when you try to sign in to your Apple ID or iCloud, "
-            "including any error message you see. Avoid sharing "
-            "your password or other sensitive account information."
+            "Thanks for reaching out. Is the issue with signing in, your "
+            "Apple ID password, iCloud, or account access? If you see an "
+            "error message, please share the message. For your security, "
+            "please don't send your password or other sensitive account "
+            "information."
         )
+
 
     if intent == "apps":
-
         return (
-            "Thanks for reaching out. Which app is affected, and "
-            "what happens when you try to use it? Please include "
-            "any error message and, if possible, your iPhone model "
-            "and iOS version."
+            "Thanks for reaching out. Which app is affected, and what "
+            "happens when you use it? Please share any error message, "
+            "your device model, and iOS version so we can narrow down "
+            "the issue."
         )
+
 
     if intent == "itunes_music":
-
         return (
-            "Thanks for reaching out. Could you tell us what "
-            "happens when you try to play or access your music? "
-            "Please include any error message and let us know "
-            "which device and iOS version you're using."
+            "Thanks for reaching out. Is the problem with missing songs, "
+            "music playback, downloads, or your music library? Please "
+            "describe what happens and share your device model and iOS "
+            "version."
         )
+
 
     if intent == "app_store_purchases":
-
         return (
-            "Thanks for reaching out. Could you tell us whether "
-            "the issue is with downloading an app, making a "
-            "purchase, or a payment? Please don't share payment "
-            "details or passwords here."
+            "Thanks for reaching out. Is the issue with downloading an "
+            "app, making a purchase, a payment, or a refund? Please share "
+            "the error or message you see. For your security, don't send "
+            "your password or full payment details."
         )
+
 
     if intent == "apple_watch":
-
         return (
-            "Thanks for reaching out. Could you tell us what is "
-            "happening with your Apple Watch and whether it is "
-            "connected to your iPhone? Please include the Watch "
-            "and iPhone models if possible."
+            "Thanks for reaching out. What problem are you experiencing "
+            "with your Apple Watch? Please let us know whether it involves "
+            "the Watch itself, pairing, or connectivity, and share the "
+            "Watch/iPhone models if possible."
         )
 
-    # -----------------------------------------------------
+
+    # ---------------------------------------------------------
     # Other / unclear
-    # -----------------------------------------------------
+    # ---------------------------------------------------------
 
     return (
-        "Thanks for reaching out. We'd like to understand the "
-        "issue better. Could you describe what is happening, "
-        "including any error message or troubleshooting steps "
-        "you have already tried?"
+        "Thanks for reaching out. Could you describe the problem in a "
+        "little more detail, including what you expected to happen, what "
+        "actually happens, and any error message you see? Your device "
+        "model and software version would also help us narrow it down."
     )
 
 
@@ -782,12 +888,13 @@ def run_agent(message):
     )
 
     reply = draft_reply(
-        message,
-        intent,
-        should_escalate,
-        escalation_reason,
-        evidence
-    )
+    message,
+    intent,
+    should_escalate,
+    escalation_reason,
+    evidence,
+    retrieval_score
+)
 
     return {
         "intent": intent,
