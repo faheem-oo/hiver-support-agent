@@ -1,77 +1,70 @@
 import os
-from dotenv import load_dotenv
-load_dotenv()
 import json
-import argparse
+import time
 import pandas as pd
+from dotenv import load_dotenv
 from google import genai
+
+load_dotenv()
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-from pathlib import Path
 
+if not GEMINI_API_KEY:
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set. Add it to your .env file."
+    )
 
-RUBRIC = {
-    "relevance": "Does the reply directly address the customer's actual problem?",
-    "groundedness": "Does the reply stay faithful to information in the customer's message and avoid invented assumptions?",
-    "helpfulness": "Does the reply provide a useful next step, diagnostic question, or appropriate handoff?",
-    "specificity": "Does the reply use important details already present in the customer's message instead of giving a generic response?",
-    "safety_escalation": "Is the response appropriately cautious and does it escalate when the situation reasonably requires human support?"
-}
+INPUT_FILE = "outputs/heldout_results.csv"
+OUTPUT_FILE = "outputs/llm_reply_quality.csv"
 
+MODEL = "gemini-3.6-flash"
 
-def build_prompt(row):
-    return f"""
-You are evaluating an AI customer-support agent for AppleSupport.
+def judge_reply(row, client):
+    prompt = f"""
+You are evaluating an AI customer-support reply for an AppleSupport
+customer-support agent.
 
 Customer message:
-{row['text']}
+{row["text"]}
 
 Predicted intent:
-{row['predicted_intent']}
+{row["predicted_intent"]}
 
-Predicted escalation:
-{row['predicted_escalate']}
+Escalation decision:
+{row["predicted_escalate"]}
 
 Escalation reason:
-{row.get('escalation_reason', '')}
+{row.get("predicted_escalation_reason", "")}
 
-Draft reply:
-{row['draft_reply']}
+Historical evidence used by the agent:
+{row.get("retrieval_evidence", "")}
 
-Evaluate ONLY the draft reply against the customer's message.
+AI-generated reply:
+{row["draft_reply"]}
 
-Score each dimension from 1 to 5:
+Evaluate the reply on these dimensions.
 
-1. relevance:
-1 = unrelated
-3 = partially addresses the issue
-5 = directly addresses the actual issue
+1. relevance
+Does the reply address the customer's actual problem?
 
-2. groundedness:
-1 = contains major unsupported assumptions or incorrect claims
-3 = mostly grounded but has some assumptions
-5 = fully grounded in the customer's message
+2. groundedness
+Does the reply avoid unsupported claims and remain consistent with
+the available historical evidence?
 
-3. helpfulness:
-1 = provides no useful next step
-3 = somewhat useful
-5 = gives a clear and appropriate next step or handoff
+3. helpfulness
+Does it meaningfully move the customer toward a solution?
 
-4. specificity:
-1 = generic and ignores important context
-3 = uses some context
-5 = meaningfully uses the details supplied by the customer
+4. specificity
+Does it provide useful problem-specific guidance rather than being
+overly generic?
 
-5. safety_escalation:
-1 = inappropriate or unsafe handling
-3 = debatable handling
-5 = appropriately cautious and escalates when warranted
+5. safety_escalation
+Does it handle risky, sensitive, unresolved, or severe situations
+appropriately and escalate when necessary?
 
-Also provide:
-- overall_score: 1-5
-- pass: true if overall_score >= 4, otherwise false
-- short_reason: one concise explanation
+Give each score from 1 to 5.
 
-Return ONLY valid JSON in this format:
+Return ONLY valid JSON. Do not use markdown fences.
 
 {{
   "relevance": 1,
@@ -79,125 +72,199 @@ Return ONLY valid JSON in this format:
   "helpfulness": 1,
   "specificity": 1,
   "safety_escalation": 1,
-  "overall_score": 1,
-  "pass": false,
-  "short_reason": "..."
+  "overall": 1,
+  "reason": "short explanation"
 }}
+
+All scores must be integers from 1 to 5.
 """
 
-
-def evaluate_with_openai(rows, model):
-    client = genai.Client(api_key=GEMINI_API_KEY)
-
-    results = []
-
-    for i, (_, row) in enumerate(rows.iterrows(), start=1):
-        print(f"Evaluating {i}/{len(rows)}...", flush=True)
-
-        response = client.models.generate_content(
-            model=model,
-            contents=build_prompt(row)
-        )
-
-        text = response.text.strip()
-
+    # Retry temporary Gemini failures
+    for attempt in range(5):
         try:
-            result = json.loads(text)
-        except json.JSONDecodeError:
-            result = {
-                "parse_error": True,
-                "raw_response": text
-            }
+            response = client.models.generate_content(
+                model=MODEL,
+                contents=prompt
+            )
 
-        result["id"] = int(row["id"])
-        results.append(result)
+            text = response.text.strip()
 
-    return results
+            if text.startswith("```"):
+                text = (
+                    text
+                    .replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+
+            try:
+                return json.loads(text)
+
+            except json.JSONDecodeError:
+                return {
+                    "relevance": None,
+                    "groundedness": None,
+                    "helpfulness": None,
+                    "specificity": None,
+                    "safety_escalation": None,
+                    "overall": None,
+                    "reason": text,
+                }
+
+        except Exception as e:
+            error_text = str(e)
+
+            temporary_error = (
+                "503" in error_text
+                or "UNAVAILABLE" in error_text
+                or "429" in error_text
+                or "RESOURCE_EXHAUSTED" in error_text
+            )
+
+            if not temporary_error:
+                raise
+
+            if attempt == 4:
+                raise
+
+            wait_time = 10 * (attempt + 1)
+
+            print(
+                f"Temporary Gemini error. "
+                f"Retry {attempt + 1}/4 in {wait_time} seconds...",
+                flush=True
+            )
+
+            time.sleep(wait_time)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--input",
-        default="outputs/heldout_results.csv"
-    )
-    parser.add_argument(
-        "--output",
-        default="outputs/reply_quality_results.csv"
-    )
-    parser.add_argument(
-        "--model",
-        default="gemini-3.6-flash"
-    )
-    args = parser.parse_args()
-
-    input_path = Path(args.input)
-    output_path = Path(args.output)
-
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    df = pd.read_csv(input_path)
-
-    required = [
-        "id",
-        "text",
-        "predicted_intent",
-        "predicted_escalate",
-        "draft_reply"
-    ]
-
-    missing = [c for c in required if c not in df.columns]
-
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
+    df = pd.read_csv(INPUT_FILE)
     print(f"Loaded {len(df)} held-out examples.")
 
+    df = df.head(20)
+    print(f"Evaluating {len(df)} examples.")
 
-    results = evaluate_with_openai(df, args.model)
 
-    result_df = pd.DataFrame(results)
+    print(f"Using Gemini model: {MODEL}")
+    print("Running LLM reply-quality evaluation...")
+    print()
 
-    merged = df.merge(result_df, on="id", how="left")
+    client = genai.Client(
+    api_key=GEMINI_API_KEY,
+    http_options={
+        "timeout": 60000
+    }
+)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(output_path, index=False)
+    # Load previous successful evaluations if they exist
+    if os.path.exists(OUTPUT_FILE):
+        previous_df = pd.read_csv(OUTPUT_FILE)
 
-    valid = merged[
-        merged["overall_score"].notna()
-    ].copy()
+        if "id" in previous_df.columns:
+            results = previous_df.to_dict("records")
+            completed_ids = set(
+                previous_df["id"].astype(int)
+            )
 
-    if len(valid) == 0:
-        print("No valid judge results were produced.")
-        return
+            print(
+                f"Found {len(results)} completed evaluations."
+            )
+            print("Resuming from previous progress...")
+            print()
+        else:
+            results = []
+            completed_ids = set()
+    else:
+        results = []
+        completed_ids = set()
 
-    dimensions = [
+    for i, row in df.iterrows():
+
+        row_id = int(row["id"])
+
+        # Skip rows already successfully evaluated
+        if row_id in completed_ids:
+            continue
+
+        print(
+            f"Evaluating {i + 1}/{len(df)}...",
+            flush=True
+        )
+
+        try:
+            result = judge_reply(row, client)
+
+            results.append({
+                "id": row_id,
+                "relevance": result.get("relevance"),
+                "groundedness": result.get("groundedness"),
+                "helpfulness": result.get("helpfulness"),
+                "specificity": result.get("specificity"),
+                "safety_escalation": result.get("safety_escalation"),
+                "overall": result.get("overall"),
+                "reason": result.get("reason", ""),
+            })
+
+            completed_ids.add(row_id)
+
+            # Save immediately after every successful evaluation
+            pd.DataFrame(results).to_csv(
+                OUTPUT_FILE,
+                index=False
+            )
+
+            print(
+                f"Completed {len(results)}/{len(df)}",
+                flush=True
+            )
+
+        except Exception as e:
+            print(
+                f"ERROR on row {row_id}: {e}",
+                flush=True
+            )
+
+            print(
+                "Stopping safely. Run the script again to resume."
+            )
+
+            break
+
+    results_df = pd.DataFrame(results)
+
+    print()
+    print("=" * 60)
+    print("LLM REPLY-QUALITY RESULTS")
+    print("=" * 60)
+
+    for column in [
         "relevance",
         "groundedness",
         "helpfulness",
         "specificity",
         "safety_escalation",
-        "overall_score"
-    ]
+        "overall",
+    ]:
+
+        values = pd.to_numeric(
+            results_df[column],
+            errors="coerce"
+        ).dropna()
+
+        if len(values) > 0:
+            print(
+                f"{column}: "
+                f"{values.mean():.2f} / 5"
+            )
 
     print()
-    print("=== Reply Quality Results ===")
+    print(f"Evaluated replies: {len(results_df)}")
+    print(f"Saved to: {OUTPUT_FILE}")
 
-    for col in dimensions:
-        print(
-            f"{col}: "
-            f"{valid[col].astype(float).mean():.3f}"
-        )
 
-    pass_rate = valid["pass"].astype(bool).mean()
-
-    print(f"pass_rate: {pass_rate:.3f}")
-    print(f"evaluated: {len(valid)}")
-
-    print()
-    print(f"Saved: {output_path}")
-
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()

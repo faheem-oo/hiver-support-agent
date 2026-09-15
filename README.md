@@ -9,7 +9,9 @@ Customer-support messages on Twitter are short, noisy, incomplete, and often con
 The system therefore solves three connected tasks:
 
 1. **Intent classification** — identify the primary customer-support intent.
+
 2. **Historical response retrieval** — retrieve similar AppleSupport customer/support interactions.
+
 3. **Escalation decision** — decide whether the issue can be handled automatically or requires additional support.
 
 The selected brand is **AppleSupport** because it has a large number of customer-support interactions in the dataset and contains a broad range of technical support issues.
@@ -25,11 +27,17 @@ Dataset: **Customer Support on Twitter (TWCS)**.
 The raw dataset contains approximately 2.8 million tweets and seven fields:
 
 - `tweet_id`
+
 - `author_id`
+
 - `inbound`
+
 - `created_at`
+
 - `text`
+
 - `response_tweet_id`
+
 - `in_response_to_tweet_id`
 
 AppleSupport contains approximately **106,860 outbound support tweets** and approximately **106,623 inbound customer tweets mentioning AppleSupport** in the extracted data.
@@ -37,23 +45,42 @@ AppleSupport contains approximately **106,860 outbound support tweets** and appr
 The pipeline:
 
 ```text
+
 Raw TWCS dataset
-       ↓
+
+       ↓
+
 AppleSupport filtering
-       ↓
+
+       ↓
+
 Customer/support thread construction
-       ↓
+
+       ↓
+
 Text preprocessing
-       ↓
+
+       ↓
+
 Intent taxonomy
-       ↓
+
+       ↓
+
 Weak-label training data
-       ↓
+
+       ↓
+
 TF-IDF + Logistic Regression
-       ↓
+
+       ↓
+
 Historical response retrieval
-       ↓
+
+       ↓
+
 Reply drafting + escalation
+
+
 
 
 
@@ -61,43 +88,64 @@ Reply drafting + escalation
 
 Eleven intents were defined from the observed AppleSupport support traffic:
 
-Intent	Description
-ios_update	iOS/software updates and update-related problems
-battery_charging	Battery drain, battery health, charging and power
-device_performance	Slow, freezing, crashing, restarting or unresponsive devices
-screen_display	Screen, touch, display and visual problems
-connectivity	Wi-Fi, Bluetooth, cellular and connection problems
-apple_id_icloud	Apple ID, iCloud, passwords and account access
-apps	Problems with individual applications
-itunes_music	Apple Music, iTunes, music library and playback
-app_store_purchases	App Store, purchases, payments and refunds
-apple_watch	Apple Watch-specific issues
-other	Unclear, insufficient or uncovered requests
+Intent Description
+
+ios_update    iOS/software updates and update-related problems
+
+battery_charging     Battery drain, battery health, charging and power
+
+device_performance   Slow, freezing, crashing, restarting or unresponsive devices
+
+screen_display       Screen, touch, display and visual problems
+
+connectivity  Wi-Fi, Bluetooth, cellular and connection problems
+
+apple_id_icloud      Apple ID, iCloud, passwords and account access
+
+apps   Problems with individual applications
+
+itunes_music  Apple Music, iTunes, music library and playback
+
+app_store_purchases  App Store, purchases, payments and refunds
+
+apple_watch   Apple Watch-specific issues
+
+other  Unclear, insufficient or uncovered requests
 
 other is deliberately retained because forcing ambiguous Twitter messages into a specific technical category creates misleading confidence.
 
 4. Training and Baselines
+
 Baseline 1 — Majority Class
 
 Every message is assigned the most common intent.
 
 Accuracy: 34.0%
+
 Macro F1: 4.61%
+
 Baseline 2 — Keyword Rules
 
 Hand-written keyword rules are used to identify the intent.
 
 Accuracy: 68.5%
+
 Macro F1: 66.03%
+
 Final Intent Model
 
 The final classifier uses:
 
 Word-level TF-IDF
+
 Unigrams and bigrams
+
 Up to 50,000 features
+
 Logistic Regression
+
 Class-balanced training
+
 Weakly labelled AppleSupport examples
 
 The final model was evaluated on a frozen held-out set that was not used for model training.
@@ -109,6 +157,7 @@ A 200-example golden set was created and manually labelled with the defined inte
 The golden set was split once using a fixed random seed:
 
 150 examples — development set
+
 50 examples — frozen held-out test set
 
 The held-out test set was not used for model training or tuning.
@@ -116,29 +165,45 @@ The held-out test set was not used for model training or tuning.
 This distinction is important because the model showed substantially higher performance on development data when those examples influenced training. The final headline numbers therefore use the untouched 50-example test set instead.
 
 6. Final Held-Out Results
+
 Intent Classification
-Metric	Result
-Accuracy	72.0%
-Macro F1	66.66%
-Errors	14 / 50
+
+Metric Result
+
+Accuracy      72.0%
+
+Macro F1      66.66%
+
+Errors 14 / 50
+
 Escalation
-Metric	Result
-Accuracy	72.0%
-Macro F1	65.28%
-Escalation F1	50.0%
-Errors	14 / 50
+
+Metric Result
+
+Accuracy      72.0%
+
+Macro F1      65.28%
+
+Escalation F1 50.0%
+
+Errors 14 / 50
 
 Escalation confusion matrix:
 
-                 Predicted
-              No       Yes
-Actual No     29        5
-Actual Yes     9        7
+                 Predicted
+
+              No       Yes
+
+Actual No     29        5
+
+Actual Yes     9        7
 
 For the positive escalation class:
 
 Precision: 58.3%
+
 Recall: 43.8%
+
 F1: 50.0%
 
 The system is therefore more conservative than ideal about escalation recall: it misses some cases that should be escalated.
@@ -154,8 +219,11 @@ Generic responses that only redirect the customer to direct messages are treated
 Retrieval uses TF-IDF similarity and combines:
 
 semantic similarity
+
 historical response quality
+
 topic overlap
+
 penalty for generic DM-only responses
 
 The final response is generated using intent-specific templates informed by the retrieved evidence.
@@ -169,14 +237,23 @@ When evidence is weak, the agent asks for additional information instead of inve
 Escalation is triggered by high-risk or unresolved signals such as:
 
 account security or hacking concerns
+
 data loss
+
 hardware damage or repair needs
+
 severe device failure
+
 repeated restarting/freezing
+
 repeated troubleshooting failures
+
 account recovery problems
+
 purchase/refund/financial issues
+
 multiple critical problems
+
 insufficient historical evidence
 
 Example:
@@ -189,66 +266,80 @@ The policy intentionally prioritizes safety over aggressive automation for secur
 
 9. Reply-Quality Evaluation
 
+Human Reply-Quality Evaluation
+
 A 20-example human review was performed on held-out generated replies.
 
 Each reply was scored from 1–5 on:
 
-Dimension	Score
-Relevance	2.65 / 5
-Groundedness	4.20 / 5
-Helpfulness	2.10 / 5
-Specificity	2.20 / 5
-Safety / escalation	3.45 / 5
-Overall	2.92 / 5
+Dimension     Score
+
+Relevance     2.65 / 5
+
+Groundedness  4.20 / 5
+
+Helpfulness   2.10 / 5
+
+Specificity   2.20 / 5
+
+Safety / escalation  3.45 / 5
+
+Overall       2.92 / 5
 
 Pass rate: 25%
 
-The results show an important trade-off: the system is relatively grounded and cautious, but generated replies are often too generic to be highly helpful.
+The human review shows an important trade-off: the system is relatively grounded and cautious, but generated replies are often too generic to be highly helpful.
 
-No LLM-judge score is reported unless an API-backed evaluation is actually run.
+LLM-Based Reply-Quality Evaluation
 
-Human-agreement limitation
+An LLM-based judge was implemented using Gemini through the Google GenAI SDK.
 
-### Optional LLM-Based Reply Judge
+The judge evaluates generated replies on:
 
-An optional API-backed LLM judge can be used to evaluate generated replies on:
+relevance
 
-- relevance
-- groundedness
-- helpfulness
-- specificity
-- safety / escalation
-- overall quality
+groundedness
 
-The evaluator uses Gemini through the Google GenAI SDK.
+helpfulness
 
-The API key is intentionally not stored in the repository.
+specificity
 
-To enable the judge locally:
+safety / escalation
 
-1. Create a Gemini API key using Google AI Studio.
-2. Create a `.env` file in the project root.
-3. Add:
+overall quality
 
-```text
+The completed evaluation covered 14 held-out generated replies.
+
+LLM-judge result:
+
+Overall: 2.93 / 5
+
+The LLM-judge result is treated as an additional qualitative evaluation and is not used as the headline model-performance metric.
+
+The API key is intentionally not stored in the repository. To reproduce the LLM evaluation locally, create a .env file containing:
+
 GEMINI_API_KEY=your_api_key_here
 
-Install the required packages:
+Then install the optional dependencies:
+
 pip install google-genai python-dotenv
-Run:
+
+and run:
+
 python src/evaluate_reply_quality.py
 
 The evaluator writes results to:
 
 outputs/llm_reply_quality.csv
 
-LLM-judge results are only reported when the API-backed evaluation completes successfully. No scores are fabricated when the API is unavailable or quota-limited.
+Human-Agreement Limitation
 
-The current reply-quality review has one human evaluator. Therefore, it is not claimed as inter-annotator agreement and no Cohen's kappa is reported.
+The reply-quality human review has one human evaluator. Therefore, it is not claimed as inter-annotator agreement and no Cohen's kappa is reported.
 
 A second independent evaluator would be required to make a genuine agreement claim.
 
 10. Top Five Failure Modes
+
 1. Ambiguous multi-symptom messages
 
 Example:
@@ -314,22 +405,39 @@ Reply quality is also materially weaker than classification performance: the hum
 The headline therefore describes a useful prototype, not a production-ready autonomous support agent.
 
 12. Engineering Decision Log
+
 Selected AppleSupport because it provides a large and diverse support corpus.
+
 Used conversation threads instead of isolated tweet pairs where possible.
+
 Defined a small 11-intent taxonomy to keep classification operational.
+
 Retained other rather than forcing uncertain messages into technical categories.
+
 Used weak labels to obtain enough training data without manually labelling thousands of examples.
+
 Created a 200-example golden set for evaluation.
+
 Frozen 50 examples for final testing to reduce evaluation leakage.
+
 Compared against a majority baseline to establish a minimum reference point.
+
 Compared against keyword rules to test whether ML improves over simple heuristics.
+
 Used class-balanced Logistic Regression because the intent distribution is highly uneven.
+
 Used historical retrieval instead of generating unsupported technical solutions.
+
 Penalized generic DM-only historical responses during retrieval.
+
 Escalated security and severe device cases conservatively.
+
 Did not report the V2 development score as the final result because the development examples influenced that experiment.
+
 Reported human reply-quality limitations explicitly rather than fabricating LLM-judge or inter-annotator results.
+
 13. One-Week Next Steps
+
 Days 1–2: Better labels
 
 Increase the golden set and have a second human independently label a subset.
@@ -341,10 +449,15 @@ Days 3–4: Better classification
 Test:
 
 conversation-level context
+
 multi-label intents
+
 character n-grams
+
 improved handling of update-related symptoms
+
 confidence calibration
+
 Day 5: Better retrieval
 
 Prioritize historical responses that contain concrete troubleshooting steps or evidence of successful resolution.
@@ -358,9 +471,13 @@ Day 7: Evaluation
 Run the same frozen test harness and compare:
 
 accuracy
+
 macro F1
+
 escalation precision/recall/F1
+
 reply-quality scores
+
 failure categories
 
 No test-set tuning should be performed.
@@ -370,28 +487,37 @@ No test-set tuning should be performed.
 Create and activate a Python virtual environment:
 
 python -m venv venv
+
 source venv/Scripts/activate
 
 Install dependencies:
 
 pip install pandas numpy scikit-learn joblib google-genai python-dotenv
-pip install google-genai python-dotenv
 
 Run the main pipeline components:
 
 python src/analyze_brand.py
+
 python src/build_threads.py
+
 python src/prepare_training_data.py
+
 python src/create_weak_labels.py
+
 python src/train_intent_model.py
+
 python src/build_retrieval_data.py
+
 python src/retrieve_responses.py
 
 Create/evaluate the golden set:
 
 python src/create_golden_set.py
+
 python src/create_eval_split.py
+
 python src/evaluate_baselines.py
+
 python src/evaluate_heldout.py
 
 Evaluate the full agent:
@@ -405,63 +531,119 @@ python src/agent.py
 The raw dataset is intentionally excluded from Git because of its size. Trained model binaries are also excluded from Git.
 
 15. Repository Structure
+
 hiver-support-agent/
+
 │
+
 ├── data/
-│   └── processed/
-│       ├── applesupport_customer_messages.csv
-│       ├── applesupport_threads.csv
-│       ├── applesupport_retrieval.csv
-│       ├── applesupport_training_messages.csv
-│       ├── golden_set.csv
-│       ├── golden_dev.csv
-│       ├── golden_test.csv
-│       └── weak_labels.csv
+
+│   └── processed/
+
+│       ├── applesupport_customer_messages.csv
+
+│       ├── applesupport_threads.csv
+
+│       ├── applesupport_retrieval.csv
+
+│       ├── applesupport_training_messages.csv
+
+│       ├── golden_set.csv
+
+│       ├── golden_dev.csv
+
+│       ├── golden_test.csv
+
+│       └── weak_labels.csv
+
 │
+
 ├── models/
-│   ├── intent_classifier.joblib
-│   ├── intent_tfidf.joblib
-│   ├── retrieval_matrix.joblib
-│   └── retrieval_tfidf.joblib
+
+│   ├── intent_classifier.joblib
+
+│   ├── intent_tfidf.joblib
+
+│   ├── retrieval_matrix.joblib
+
+│   └── retrieval_tfidf.joblib
+
 │
+
 ├── outputs/
-│   ├── baseline_results.csv
-│   ├── agent_eval.csv
-│   ├── heldout_results.csv
-│   ├── human_reply_quality.csv
-│   └── intent_model_results.csv
+
+│   ├── baseline_results.csv
+
+│   ├── agent_eval.csv
+
+│   ├── heldout_results.csv
+
+│   ├── human_reply_quality.csv
+
+│   └── intent_model_results.csv
+
 │
+
 ├── src/
-│   ├── agent.py
-│   ├── analyze_brand.py
-│   ├── build_threads.py
-│   ├── build_retrieval_data.py
-│   ├── create_eval_split.py
-│   ├── create_golden_set.py
-│   ├── create_human_eval.py
-│   ├── create_weak_labels.py
-│   ├── evaluate_agent.py
-│   ├── evaluate_baselines.py
-│   ├── evaluate_heldout.py
-│   ├── evaluate_reply_quality.py
-│   ├── retrieve_responses.py
-│   └── train_intent_model.py
+
+│   ├── agent.py
+
+│   ├── analyze_brand.py
+
+│   ├── build_threads.py
+
+│   ├── build_retrieval_data.py
+
+│   ├── create_eval_split.py
+
+│   ├── create_golden_set.py
+
+│   ├── create_human_eval.py
+
+│   ├── create_weak_labels.py
+
+│   ├── evaluate_agent.py
+
+│   ├── evaluate_baselines.py
+
+│   ├── evaluate_heldout.py
+
+│   ├── evaluate_reply_quality.py
+
+│   ├── retrieve_responses.py
+
+│   └── train_intent_model.py
+
 │
+
 └── README.md
+
 Final Assessment
 
 This project demonstrates a complete support-agent prototype with:
 
 reproducible preprocessing
+
 explicit intent taxonomy
+
 weakly supervised training
+
 baseline comparison
+
 frozen held-out evaluation
+
 historical response retrieval
+
 deterministic reply drafting
+
 escalation policy
+
 human reply-quality evaluation
+
+LLM-based reply-quality evaluation
+
 failure analysis
+
 documented engineering decisions
 
 The current system is best viewed as a measurable prototype, not a production autonomous support system. The evaluation shows that classification is promising but ambiguous multi-symptom messages, retrieval quality, and escalation recall remain the main areas for improvement.
