@@ -209,6 +209,41 @@ No LLM-judge score is reported unless an API-backed evaluation is actually run.
 
 Human-agreement limitation
 
+### Optional LLM-Based Reply Judge
+
+An optional API-backed LLM judge can be used to evaluate generated replies on:
+
+- relevance
+- groundedness
+- helpfulness
+- specificity
+- safety / escalation
+- overall quality
+
+The evaluator uses Gemini through the Google GenAI SDK.
+
+The API key is intentionally not stored in the repository.
+
+To enable the judge locally:
+
+1. Create a Gemini API key using Google AI Studio.
+2. Create a `.env` file in the project root.
+3. Add:
+
+```text
+GEMINI_API_KEY=your_api_key_here
+
+Install the required packages:
+pip install google-genai python-dotenv
+Run:
+python src/evaluate_reply_quality.py
+
+The evaluator writes results to:
+
+outputs/llm_reply_quality.csv
+
+LLM-judge results are only reported when the API-backed evaluation completes successfully. No scores are fabricated when the API is unavailable or quota-limited.
+
 The current reply-quality review has one human evaluator. Therefore, it is not claimed as inter-annotator agreement and no Cohen's kappa is reported.
 
 A second independent evaluator would be required to make a genuine agreement claim.
@@ -339,7 +374,8 @@ source venv/Scripts/activate
 
 Install dependencies:
 
-pip install pandas numpy scikit-learn joblib
+pip install pandas numpy scikit-learn joblib google-genai python-dotenv
+pip install google-genai python-dotenv
 
 Run the main pipeline components:
 

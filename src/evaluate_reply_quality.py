@@ -1,7 +1,11 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import json
 import argparse
 import pandas as pd
+from google import genai
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 from pathlib import Path
 
 
@@ -83,26 +87,19 @@ Return ONLY valid JSON in this format:
 
 
 def evaluate_with_openai(rows, model):
-    try:
-        from openai import OpenAI
-    except ImportError:
-        raise RuntimeError(
-            "OpenAI package is not installed. Run: pip install openai"
-        )
-
-    client = OpenAI()
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
     results = []
 
     for i, (_, row) in enumerate(rows.iterrows(), start=1):
         print(f"Evaluating {i}/{len(rows)}...", flush=True)
 
-        response = client.responses.create(
+        response = client.models.generate_content(
             model=model,
-            input=build_prompt(row)
+            contents=build_prompt(row)
         )
 
-        text = response.output_text.strip()
+        text = response.text.strip()
 
         try:
             result = json.loads(text)
@@ -130,7 +127,7 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.6-mini"
+        default="gemini-3.6-flash"
     )
     args = parser.parse_args()
 
@@ -157,16 +154,6 @@ def main():
 
     print(f"Loaded {len(df)} held-out examples.")
 
-    if not os.getenv("OPENAI_API_KEY"):
-        print()
-        print("OPENAI_API_KEY is not set.")
-        print("No LLM-judge scores were generated.")
-        print("This is intentional: the harness will not fabricate results.")
-        print()
-        print("To run the judge:")
-        print("  export OPENAI_API_KEY='your-key'")
-        print("  python src/evaluate_reply_quality.py")
-        return
 
     results = evaluate_with_openai(df, args.model)
 
